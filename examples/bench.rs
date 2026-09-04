@@ -6,10 +6,10 @@
 
 use std::time::{Duration, Instant};
 
+use pq_objectstore::PqObjectStore;
 use pq_objectstore::backend::MemoryBackend;
 use pq_objectstore::crypto::{encapsulate, generate_keypair};
 use pq_objectstore::key::{KeyId, KeyProvider, LocalKeyProvider};
-use pq_objectstore::PqObjectStore;
 
 fn fmt_bytes(n: f64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
@@ -85,7 +85,9 @@ async fn bench_put_get(size: usize, rounds: usize) -> pq_objectstore::Result<(Du
     Ok((put_total / rounds as u32, get_total / rounds as u32))
 }
 
-async fn bench_small_object_latency(rounds: usize) -> pq_objectstore::Result<(Duration, Duration, Duration)> {
+async fn bench_small_object_latency(
+    rounds: usize,
+) -> pq_objectstore::Result<(Duration, Duration, Duration)> {
     let store = make_store().await?;
     let payload = b"agent-memory-frame";
     let mut puts = Vec::with_capacity(rounds);
