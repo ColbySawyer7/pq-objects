@@ -38,6 +38,24 @@ jobs:
       - name: Package
         run: cargo package --allow-dirty
 
+      - name: Core (no store)
+        run: cargo test --no-default-features --features local-keys
+
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: Check wasm core
+        run: >
+          cargo check
+          --target wasm32-unknown-unknown
+          --no-default-features
+          --features "wasm,local-keys"
+
   msrv:
     runs-on: ubuntu-latest
     steps:

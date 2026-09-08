@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Sync `seal` / `open` / `peek_header` byte API (no object backend)
+- `store` feature gating Tokio / backends (disable for wasm)
+- `wasm` feature with `wasm-bindgen` exports for Workers / Next.js
+- `examples/seal_bytes.rs` and wasm CI check
+
 ## [0.1.0] - 2026-09-04
 
 ### Added

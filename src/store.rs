@@ -10,10 +10,8 @@ use futures::StreamExt;
 use tokio::io::{AsyncRead, AsyncReadExt, ReadBuf};
 
 use crate::backend::{BackendMetadata, ObjectBackend};
-use crate::crypto::cipher::{DataEncryptionKey, unwrap_dek, wrap_dek};
-use crate::crypto::stream::{
-    CHUNK_PLAINTEXT_SIZE, decrypt_chunk, encrypt_chunk, generate_stream_nonce_prefix,
-};
+use crate::crypto::cipher::{DataEncryptionKey, wrap_dek};
+use crate::crypto::stream::{CHUNK_PLAINTEXT_SIZE, encrypt_chunk, generate_stream_nonce_prefix};
 use crate::crypto::{CipherSuite, encapsulate};
 use crate::error::{Error, Result};
 use crate::format::{ObjectHeader, encode_chunk_frame};
@@ -107,8 +105,17 @@ impl PqObjectStore {
 
     /// Encrypt and upload raw bytes.
     pub async fn put_bytes(&self, key: &str, bytes: impl AsRef<[u8]>) -> Result<PutResult> {
-        let bytes = bytes.as_ref().to_vec();
-        self.put(key, &bytes[..]).await
+        let public = self.keys.public_key(&self.write_key_id).await?;
+        let ciphertext = crate::seal::seal(bytes.as_ref(), &public, &self.write_key_id)?;
+        let stream = futures::stream::once(async move {
+            Ok::<bytes::Bytes, std::io::Error>(bytes::Bytes::from(ciphertext))
+        });
+        self.backend.put(key, Box::pin(stream)).await?;
+        Ok(PutResult {
+            key: key.to_string(),
+            key_id: self.write_key_id.clone(),
+            suite: CipherSuite::MlKem768Aes256GcmV1,
+        })
     }
 
     /// Download and decrypt into a byte buffer.
@@ -217,38 +224,12 @@ impl PqObjectStore {
     }
 
     async fn decrypt_object(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
-        let (header, mut rest) = ObjectHeader::decode(ciphertext)?;
-        let aad = header.aad();
+        let header = crate::seal::peek_header(ciphertext)?;
         let shared = self
             .keys
             .decapsulate(&header.key_id, &header.kem_ciphertext)
             .await?;
-        let dek = unwrap_dek(&shared, &header.wrap_nonce, &header.wrapped_dek, &aad)?;
-
-        let mut plaintext = Vec::new();
-        let mut counter = 0u32;
-        loop {
-            let Some(frame) = crate::format::read_chunk_frame(&mut rest)? else {
-                return Err(Error::invalid_header("missing final stream chunk"));
-            };
-            let is_final = rest.is_empty();
-            let chunk = decrypt_chunk(
-                &dek,
-                &header.stream_nonce_prefix,
-                counter,
-                is_final,
-                &frame,
-                &aad,
-            )?;
-            plaintext.extend_from_slice(&chunk);
-            if is_final {
-                break;
-            }
-            counter = counter
-                .checked_add(1)
-                .ok_or_else(|| Error::crypto("chunk counter overflow"))?;
-        }
-        Ok(plaintext)
+        crate::seal::open_with_shared(ciphertext, &shared)
     }
 }
 

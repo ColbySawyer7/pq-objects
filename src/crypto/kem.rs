@@ -1,9 +1,7 @@
 //! ML-KEM-768 key generation, encapsulation, and secret handling.
 
 use ml_kem::array::Array;
-#[cfg(feature = "local-keys")]
-use ml_kem::kem::Decapsulate;
-use ml_kem::kem::{Encapsulate, FromSeed, Kem, KeyExport};
+use ml_kem::kem::{Decapsulate, Encapsulate, FromSeed, Kem, KeyExport};
 use ml_kem::{EncapsulationKey, MlKem768};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
@@ -92,13 +90,18 @@ impl SecretKey {
         Ok(Self(seed))
     }
 
-    #[cfg_attr(not(feature = "local-keys"), allow(dead_code))]
     pub(crate) fn as_seed_array(&self) -> Array<u8, ml_kem::array::typenum::U64> {
         Array::try_from(self.0.as_slice()).expect("seed length is fixed at 64")
     }
 
-    #[cfg_attr(not(feature = "local-keys"), allow(dead_code))]
-    pub(crate) fn as_bytes(&self) -> &[u8; SEED_LEN] {
+    /// Borrow the 64-byte seed encoding.
+    ///
+    /// # Security
+    ///
+    /// This is private key material. Prefer keeping it in [`SecretKey`] rather
+    /// than copying into application buffers.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8; SEED_LEN] {
         &self.0
     }
 }
@@ -150,7 +153,6 @@ pub fn generate_keypair() -> (SecretKey, PublicKey) {
 }
 
 /// Reconstruct a keypair from a 64-byte seed.
-#[cfg(feature = "local-keys")]
 pub(crate) fn keypair_from_seed(
     secret: &SecretKey,
 ) -> (ml_kem::DecapsulationKey<MlKem768>, PublicKey) {
@@ -175,7 +177,6 @@ pub fn encapsulate(public: &PublicKey) -> Result<(Vec<u8>, SharedSecret)> {
 }
 
 /// Decapsulate `ciphertext` with `secret`.
-#[cfg(feature = "local-keys")]
 pub(crate) fn decapsulate(secret: &SecretKey, ciphertext: &[u8]) -> Result<SharedSecret> {
     if ciphertext.len() != CIPHERTEXT_LEN {
         return Err(Error::crypto(format!(
@@ -198,15 +199,8 @@ mod tests {
     fn kem_round_trip() {
         let (sk, pk) = generate_keypair();
         let (ct, ss1) = encapsulate(&pk).unwrap();
-        #[cfg(feature = "local-keys")]
-        {
-            let ss2 = decapsulate(&sk, &ct).unwrap();
-            assert_eq!(ss1.as_bytes(), ss2.as_bytes());
-        }
-        #[cfg(not(feature = "local-keys"))]
-        {
-            let _ = (sk, ct, ss1);
-        }
+        let ss2 = decapsulate(&sk, &ct).unwrap();
+        assert_eq!(ss1.as_bytes(), ss2.as_bytes());
     }
 
     #[test]

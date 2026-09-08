@@ -3,12 +3,14 @@
 //! Post-quantum encrypted object storage for Rust.
 //!
 //! `pq-objectstore` encrypts data locally before writing it to an S3-compatible
-//! object store. The storage provider is treated as an **untrusted ciphertext
-//! store**.
+//! object store — or, with the sync [`mod@seal`] API, returns PQOS ciphertext bytes
+//! for another runtime (TypeScript / Cloudflare Workers) to store on R2.
 //!
-//! ## Quick Start
+//! ## Quick Start (Rust store)
 //!
 //! ```no_run
+//! # #[cfg(all(feature = "store", feature = "local-keys"))]
+//! # {
 //! use pq_objectstore::{
 //!     PqObjectStore,
 //!     backend::MemoryBackend,
@@ -30,58 +32,62 @@
 //! assert_eq!(plaintext, b"secret");
 //! # Ok(())
 //! # }
+//! # }
+//! ```
+//!
+//! ## Quick Start (seal bytes / wasm)
+//!
+//! ```
+//! use pq_objectstore::crypto::generate_keypair;
+//! use pq_objectstore::key::KeyId;
+//! use pq_objectstore::seal::{open, seal};
+//!
+//! let (secret, public) = generate_keypair();
+//! let key_id = KeyId::new("workspace-a-v1").unwrap();
+//! let ciphertext = seal(b"secret", &public, &key_id).unwrap();
+//! assert_eq!(open(&ciphertext, &secret).unwrap(), b"secret");
 //! ```
 //!
 //! ## Architecture
 //!
 //! Each object receives a unique AES-256-GCM data-encryption key (DEK). That DEK
-//! is wrapped using an ML-KEM-768 shared secret derived from a long-lived key
-//! supplied by a [`KeyProvider`]. Object payloads are encrypted with a chunked
-//! STREAM construction so large objects can be processed with bounded memory at
-//! the crypto layer.
-//!
-//! ## Security Model
-//!
-//! The backend learns ciphertext, object keys/paths, and sizes — not plaintext
-//! contents or data-encryption keys. See `SECURITY.md` for the full threat
-//! model.
-//!
-//! ## Key Management
-//!
-//! Private ML-KEM keys are supplied through a [`KeyProvider`]. The initial
-//! implementation is [`key::LocalKeyProvider`]. Writes use the configured active
-//! key ID; reads resolve the key ID recorded in each object header, enabling
-//! rotation without rewriting historical objects.
-//!
-//! ## Object Format
-//!
-//! Encrypted objects begin with a versioned `PQOS` header. The binary layout is
-//! documented in [`mod@format`].
+//! is wrapped using an ML-KEM-768 shared secret derived from a long-lived key.
+//! Object payloads use a chunked STREAM construction.
 //!
 //! ## Features
 //!
+//! - `store` (default): async [`PqObjectStore`] + backends
 //! - `s3` (default): Cloudflare R2 / AWS S3 / MinIO / RustFS backend
 //! - `local-keys` (default): [`key::LocalKeyProvider`]
+//! - `wasm`: `wasm-bindgen` exports for Workers / Next.js (`seal` / `open`)
 //! - `tracing`: optional structured logging (never logs secrets)
-//!
-//! ## Examples
-//!
-//! See the `examples` directory for R2, MinIO, and local-key walkthroughs.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 #![warn(clippy::all)]
 
-pub mod backend;
 pub mod crypto;
 pub mod error;
 pub mod format;
 pub mod key;
+pub mod seal;
+
+#[cfg(feature = "store")]
+pub mod backend;
+#[cfg(feature = "store")]
 pub mod store;
 
+#[cfg(feature = "wasm")]
+pub mod wasm;
+
 pub use error::{Error, Result};
-pub use key::{KeyId, KeyProvider};
+pub use key::KeyId;
+pub use seal::{SealInfo, open, peek_header, seal, seal_with_info};
+
+#[cfg(feature = "store")]
+pub use key::KeyProvider;
+#[cfg(feature = "store")]
 pub use store::{
     EncryptedObjectStore, EncryptedReader, ObjectMetadata, PqObjectStore, PqObjectStoreBuilder,
     PutResult,

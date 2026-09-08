@@ -47,6 +47,7 @@ pub enum Error {
 }
 
 impl Error {
+    #[cfg(feature = "store")]
     pub(crate) fn backend(err: impl fmt::Display) -> Self {
         Self::Backend(err.to_string())
     }

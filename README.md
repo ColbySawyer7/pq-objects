@@ -82,12 +82,20 @@ cargo run --release --example bench
 - **Transparent API** — `put` / `get` instead of hand-rolled envelope encryption
 - **Key rotation** — each object records a `key_id`; old keys stay readable
 - **Embeddable** — small surface area for Celld, agents, and services
+- **Wasm-ready** — sync `seal` / `open` for Next.js Cloudflare Workers (JS owns R2)
 
 ## Installation
 
 ```toml
 [dependencies]
 pq-objectstore = "0.1"
+```
+
+For Workers / wasm only (no Tokio / AWS SDK):
+
+```toml
+[dependencies]
+pq-objectstore = { version = "0.1", default-features = false, features = ["wasm", "local-keys"] }
 ```
 
 ## Quick Start
@@ -117,7 +125,57 @@ async fn main() -> pq_objectstore::Result<()> {
 }
 ```
 
-## Cloudflare R2
+## Wasm / TypeScript (Cloudflare Worker + R2)
+
+Rust seals bytes; your Worker writes ciphertext to R2:
+
+```text
+TS Worker                    pq-objectstore (wasm)
+─────────                    ────────────────────
+plaintext ──seal()────────►  PQOS ciphertext
+     │
+     └── R2.put(key, ct)
+
+R2.get(key) ──open()──────►  plaintext
+```
+
+```bash
+rustup target add wasm32-unknown-unknown
+wasm-pack build --target web --out-dir pkg \
+  -- --no-default-features --features "wasm,local-keys"
+```
+
+```ts
+import init, { PqosKeypair, seal, open, peekKeyId } from "./pkg/pq_objectstore.js";
+
+await init();
+
+const keys = new PqosKeypair(); // or PqosKeypair.fromSecretSeed(seed)
+const keyId = "workspace-a-v1";
+const ciphertext = seal(plaintextBytes, keys.publicKey, keyId);
+
+await env.MY_BUCKET.put(objectKey, ciphertext);
+
+const obj = await env.MY_BUCKET.get(objectKey);
+const ct = new Uint8Array(await obj.arrayBuffer());
+const whichKey = peekKeyId(ct); // for rotation
+const plaintext = open(ct, keys.secretSeed);
+```
+
+Native Rust (no wasm) can use the same byte API:
+
+```rust
+use pq_objectstore::crypto::generate_keypair;
+use pq_objectstore::key::KeyId;
+use pq_objectstore::seal::{open, seal};
+
+let (secret, public) = generate_keypair();
+let key_id = KeyId::new("workspace-a-v1")?;
+let ct = seal(b"secret", &public, &key_id)?;
+assert_eq!(open(&ct, &secret)?, b"secret");
+```
+
+## Cloudflare R2 (Rust S3 backend)
 
 ```bash
 export R2_ENDPOINT=https://<accountid>.r2.cloudflarestorage.com
@@ -152,14 +210,22 @@ Generate v2 → publish public key → set v2 active
     → new writes use v2 → v1 remains for reads → retire v1
 ```
 
-## Supported Backends
+## Features / Backends
+
+| Feature | Default | Purpose |
+| --- | --- | --- |
+| `store` | yes | Async `PqObjectStore` + backends |
+| `s3` | yes | R2 / S3 / MinIO / RustFS |
+| `local-keys` | yes | `LocalKeyProvider` |
+| `wasm` | no | `wasm-bindgen` `seal` / `open` / `PqosKeypair` |
 
 | Backend | Feature | Notes |
 | --- | --- | --- |
 | Cloudflare R2 | `s3` | `region = "auto"` |
 | AWS S3 | `s3` | Standard AWS endpoints |
 | MinIO / RustFS | `s3` | Path-style friendly |
-| `MemoryBackend` | always | Tests and local embedding |
+| `MemoryBackend` | `store` | Tests and local embedding |
+| Byte `seal` / `open` | always | JS/Worker owns storage |
 
 ## Object Format
 
@@ -180,4 +246,7 @@ Rust **1.94** or newer.
 Licensed under either of
 
 - Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
 
