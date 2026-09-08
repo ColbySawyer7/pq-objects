@@ -1,21 +1,37 @@
 //! `wasm-bindgen` exports for Cloudflare Workers / Next.js.
 //!
-//! Build with:
+//! # Build
 //!
 //! ```bash
 //! rustup target add wasm32-unknown-unknown
-//! cargo build --release --target wasm32-unknown-unknown \
-//!   --no-default-features --features "wasm,local-keys"
-//! ```
-//!
-//! Or via `wasm-pack`:
-//!
-//! ```bash
 //! wasm-pack build --target web --out-dir pkg \
 //!   -- --no-default-features --features "wasm,local-keys"
 //! ```
 //!
-//! TypeScript then seals bytes and writes ciphertext to R2 itself.
+//! # TypeScript quick start
+//!
+//! ```ts
+//! import init, { PqosKeypair, seal, open, peekKeyId } from "./pkg/pq_objectstore.js";
+//!
+//! await init();
+//!
+//! // Generate once; persist secretSeed (64 bytes) in a Worker secret.
+//! const keys = new PqosKeypair();
+//! // const keys = PqosKeypair.fromSecretSeed(seedBytes);
+//!
+//! const keyId = "workspace-a-v1";
+//! const ciphertext = seal(plaintextBytes, keys.publicKey, keyId);
+//! await env.MY_BUCKET.put(objectKey, ciphertext);
+//!
+//! const obj = await env.MY_BUCKET.get(objectKey);
+//! const ct = new Uint8Array(await obj.arrayBuffer());
+//! const whichKey = peekKeyId(ct); // rotation
+//! const plaintext = open(ct, keys.secretSeed);
+//! ```
+//!
+//! JS owns R2 (or any store). This module only seals / opens PQOS bytes.
+//!
+//! Full Worker cookbook: crate-level docs on [docs.rs/pq-objectstore](https://docs.rs/pq-objectstore).
 
 use wasm_bindgen::prelude::*;
 

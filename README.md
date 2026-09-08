@@ -100,6 +100,8 @@ pq-objectstore = { version = "0.1", default-features = false, features = ["wasm"
 
 ## Quick Start
 
+### Rust store
+
 ```rust
 use pq_objectstore::{
     PqObjectStore,
@@ -125,19 +127,22 @@ async fn main() -> pq_objectstore::Result<()> {
 }
 ```
 
-## Wasm / TypeScript (Cloudflare Worker + R2)
+### Cookbook: TypeScript + Cloudflare Worker + R2
 
-Rust seals bytes; your Worker writes ciphertext to R2:
+Rust/WASM seals bytes; your Worker owns R2:
 
 ```text
-TS Worker                    pq-objectstore (wasm)
-─────────                    ────────────────────
-plaintext ──seal()────────►  PQOS ciphertext
+TS Worker                         pq-objectstore (wasm)
+─────────                         ────────────────────
+plaintext ── seal() ────────────► PQOS ciphertext
      │
-     └── R2.put(key, ct)
+     └── await env.MY_BUCKET.put(key, ct)
 
-R2.get(key) ──open()──────►  plaintext
+ct = await env.MY_BUCKET.get(key)
+plaintext ◄── open(ct, secretSeed)
 ```
+
+**1. Build the package**
 
 ```bash
 rustup target add wasm32-unknown-unknown
@@ -145,24 +150,71 @@ wasm-pack build --target web --out-dir pkg \
   -- --no-default-features --features "wasm,local-keys"
 ```
 
+**2. Worker example**
+
 ```ts
-import init, { PqosKeypair, seal, open, peekKeyId } from "./pkg/pq_objectstore.js";
+import init, {
+  PqosKeypair,
+  seal,
+  open,
+  peekKeyId,
+} from "../pkg/pq_objectstore.js";
 
-await init();
+export interface Env {
+  MY_BUCKET: R2Bucket;
+  /** 64-byte ML-KEM seed, base64 — set via `wrangler secret` */
+  PQ_SECRET_SEED_B64: string;
+}
 
-const keys = new PqosKeypair(); // or PqosKeypair.fromSecretSeed(seed)
-const keyId = "workspace-a-v1";
-const ciphertext = seal(plaintextBytes, keys.publicKey, keyId);
+let wasmReady: Promise<void> | undefined;
 
-await env.MY_BUCKET.put(objectKey, ciphertext);
+function ensureWasm() {
+  wasmReady ??= init().then(() => undefined);
+  return wasmReady;
+}
 
-const obj = await env.MY_BUCKET.get(objectKey);
-const ct = new Uint8Array(await obj.arrayBuffer());
-const whichKey = peekKeyId(ct); // for rotation
-const plaintext = open(ct, keys.secretSeed);
+function loadKeys(env: Env): PqosKeypair {
+  const seed = Uint8Array.from(atob(env.PQ_SECRET_SEED_B64), (c) =>
+    c.charCodeAt(0),
+  );
+  return PqosKeypair.fromSecretSeed(seed);
+}
+
+export default {
+  async fetch(req: Request, env: Env): Promise<Response> {
+    await ensureWasm();
+    const keys = loadKeys(env);
+    const keyId = "workspace-a-v1";
+    const objectKey = new URL(req.url).pathname.replace(/^\//, "") || "demo.bin";
+
+    if (req.method === "PUT") {
+      const plaintext = new Uint8Array(await req.arrayBuffer());
+      const ciphertext = seal(plaintext, keys.publicKey, keyId);
+      await env.MY_BUCKET.put(objectKey, ciphertext);
+      return new Response(null, { status: 204 });
+    }
+
+    if (req.method === "GET") {
+      const obj = await env.MY_BUCKET.get(objectKey);
+      if (!obj) return new Response("not found", { status: 404 });
+      const ct = new Uint8Array(await obj.arrayBuffer());
+      const _whichKey = peekKeyId(ct); // use after rotation
+      const plaintext = open(ct, keys.secretSeed);
+      return new Response(plaintext);
+    }
+
+    return new Response("method not allowed", { status: 405 });
+  },
+};
 ```
 
-Native Rust (no wasm) can use the same byte API:
+**3. Next.js on Cloudflare**
+
+Same module from a Cloudflare-hosted route / OpenNext Worker: `await init()`,
+then `seal` / `open` before `env.MY_BUCKET.put` / `.get`. Keep `secretSeed` in
+Worker secrets — never ship it to the browser.
+
+**4. Native Rust seal (no WASM)**
 
 ```rust
 use pq_objectstore::crypto::generate_keypair;
@@ -174,6 +226,9 @@ let key_id = KeyId::new("workspace-a-v1")?;
 let ct = seal(b"secret", &public, &key_id)?;
 assert_eq!(open(&ct, &secret)?, b"secret");
 ```
+
+The same cookbook lives on the [docs.rs crate page](https://docs.rs/pq-objectstore)
+under **Quick starts → Cookbook: TypeScript + Cloudflare Worker + R2**.
 
 ## Cloudflare R2 (Rust S3 backend)
 

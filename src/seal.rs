@@ -9,7 +9,12 @@
 //! JS/Worker:  ciphertext = await env.MY_BUCKET.get(key)
 //! Rust/wasm:  open(ciphertext) -> plaintext
 //! ```
-
+//!
+//! For the full TypeScript Worker cookbook (init, secrets, PUT/GET handlers),
+//! see the crate root docs: [pq_objectstore](crate).
+//!
+//! When building for the browser / Workers, enable the [`crate::wasm`] module
+//! (`--features wasm`) instead of calling these Rust functions directly.
 use crate::crypto::cipher::{DataEncryptionKey, unwrap_dek, wrap_dek};
 use crate::crypto::kem::{self, PublicKey, SecretKey};
 use crate::crypto::stream::{
