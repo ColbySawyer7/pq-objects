@@ -76,7 +76,7 @@
 //! Cargo dependency equivalent:
 //!
 //! ```toml
-//! pq-objectstore = { version = "0.1", default-features = false, features = ["wasm", "local-keys"] }
+//! pq-objectstore = { version = "0.2", default-features = false, features = ["wasm", "local-keys"] }
 //! ```
 //!
 //! ### Worker flow
@@ -211,8 +211,8 @@ pub use seal::{SealInfo, open, peek_header, seal, seal_with_info};
 pub use key::KeyProvider;
 #[cfg(feature = "store")]
 pub use store::{
-    EncryptedObjectStore, EncryptedReader, ObjectMetadata, PqObjectStore, PqObjectStoreBuilder,
-    PutResult,
+    EncryptedObjectStore, EncryptedReader, ListPage, ListedObject, ObjectMetadata, PqObjectStore,
+    PqObjectStoreBuilder, PutResult,
 };
 
 #[cfg(feature = "local-keys")]

@@ -217,12 +217,17 @@ pub fn read_chunk_frame<R: Read>(reader: &mut R) -> Result<Option<Vec<u8>>> {
         Err(e) => return Err(e.into()),
     }
     let len = u32::from_be_bytes(len_buf) as usize;
-    if !(16..=crate::crypto::CHUNK_PLAINTEXT_SIZE + 16).contains(&len) {
+    if !chunk_len_in_range(len) {
         return Err(Error::invalid_header("invalid chunk length"));
     }
     let mut ct = vec![0u8; len];
     reader.read_exact(&mut ct)?;
     Ok(Some(ct))
+}
+
+/// Whether `len` is a legal STREAM chunk ciphertext length (including the tag).
+pub(crate) fn chunk_len_in_range(len: usize) -> bool {
+    (16..=crate::crypto::CHUNK_PLAINTEXT_SIZE + 16).contains(&len)
 }
 
 fn read_u16<R: Read>(reader: &mut R) -> Result<u16> {

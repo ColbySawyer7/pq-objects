@@ -12,7 +12,7 @@ use crate::key::KeyId;
 use std::path::Path;
 
 #[cfg(not(target_arch = "wasm32"))]
-use crate::crypto::kem::SEED_LEN;
+use crate::crypto::kem::{PUBLIC_KEY_LEN, SEED_LEN};
 
 #[cfg(feature = "store")]
 use crate::key::{KeyProvider, PublicKeyMaterial};
@@ -22,8 +22,12 @@ use async_trait::async_trait;
 #[cfg(not(target_arch = "wasm32"))]
 const KEY_FILE_MAGIC: &[u8; 6] = b"PQKEY\x01";
 
+/// Public-only recipient file. The 64-byte seed is not present.
+#[cfg(not(target_arch = "wasm32"))]
+const RECIPIENT_FILE_MAGIC: &[u8; 6] = b"PQREC\x01";
+
 struct KeyEntry {
-    secret: SecretKey,
+    secret: Option<SecretKey>,
     public: PublicKey,
 }
 
@@ -76,7 +80,35 @@ impl LocalKeyProvider {
         if keys.contains_key(&key_id) {
             return Err(Error::config(format!("key id already present: {key_id}")));
         }
-        keys.insert(key_id, KeyEntry { secret, public });
+        keys.insert(
+            key_id,
+            KeyEntry {
+                secret: Some(secret),
+                public,
+            },
+        );
+        Ok(())
+    }
+
+    /// Insert a public encapsulation key with no private key.
+    ///
+    /// The provider can encrypt to `key_id`. Decapsulation fails until a
+    /// private key is inserted for the same id on a machine that holds the seed.
+    pub fn insert_public(&self, key_id: KeyId, public: PublicKey) -> Result<()> {
+        let mut keys = self
+            .keys
+            .write()
+            .map_err(|_| Error::crypto("key provider lock poisoned"))?;
+        if keys.contains_key(&key_id) {
+            return Err(Error::config(format!("key id already present: {key_id}")));
+        }
+        keys.insert(
+            key_id,
+            KeyEntry {
+                secret: None,
+                public,
+            },
+        );
         Ok(())
     }
 
@@ -108,7 +140,11 @@ impl LocalKeyProvider {
         let entry = keys
             .get(key_id)
             .ok_or_else(|| Error::UnknownKey(key_id.to_string()))?;
-        SecretKey::from_seed(entry.secret.as_bytes())
+        let secret = entry
+            .secret
+            .as_ref()
+            .ok_or_else(|| Error::crypto("private key is not loaded for this key id"))?;
+        SecretKey::from_seed(secret.as_bytes())
     }
 
     /// Decapsulate with the secret for `key_id` (sync).
@@ -120,7 +156,11 @@ impl LocalKeyProvider {
         let entry = keys
             .get(key_id)
             .ok_or_else(|| Error::UnknownKey(key_id.to_string()))?;
-        kem::decapsulate(&entry.secret, ciphertext)
+        let secret = entry
+            .secret
+            .as_ref()
+            .ok_or_else(|| Error::crypto("private key is not loaded for this key id"))?;
+        kem::decapsulate(secret, ciphertext)
     }
 
     /// List known key IDs.
@@ -144,14 +184,79 @@ impl LocalKeyProvider {
         let entry = keys
             .get(key_id)
             .ok_or_else(|| Error::UnknownKey(key_id.to_string()))?;
+        let secret = entry
+            .secret
+            .as_ref()
+            .ok_or_else(|| Error::crypto("private key is not loaded for this key id"))?;
         let id_bytes = key_id.as_str().as_bytes();
         let mut buf = Vec::with_capacity(6 + 2 + id_bytes.len() + SEED_LEN);
         buf.extend_from_slice(KEY_FILE_MAGIC);
         buf.extend_from_slice(&(id_bytes.len() as u16).to_be_bytes());
         buf.extend_from_slice(id_bytes);
-        buf.extend_from_slice(entry.secret.as_bytes());
+        buf.extend_from_slice(secret.as_bytes());
         std::fs::write(path, buf)?;
         Ok(())
+    }
+
+    /// Write a recipient file containing `key_id` and the public key only.
+    ///
+    /// Copy this file to a backup host. That host can encrypt with
+    /// [`Self::load_recipient`]. The 64-byte seed stays in the key file from
+    /// [`Self::save_key`] on the machine that decrypts.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::UnknownKey`] if `key_id` is not loaded, or [`Error::Io`]
+    /// if the file cannot be written.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn save_recipient(&self, key_id: &KeyId, path: impl AsRef<Path>) -> Result<()> {
+        let keys = self
+            .keys
+            .read()
+            .map_err(|_| Error::crypto("key provider lock poisoned"))?;
+        let entry = keys
+            .get(key_id)
+            .ok_or_else(|| Error::UnknownKey(key_id.to_string()))?;
+        let id_bytes = key_id.as_str().as_bytes();
+        let mut buf = Vec::with_capacity(6 + 2 + id_bytes.len() + PUBLIC_KEY_LEN);
+        buf.extend_from_slice(RECIPIENT_FILE_MAGIC);
+        buf.extend_from_slice(&(id_bytes.len() as u16).to_be_bytes());
+        buf.extend_from_slice(id_bytes);
+        buf.extend_from_slice(entry.public.as_bytes());
+        std::fs::write(path, buf)?;
+        Ok(())
+    }
+
+    /// Load a recipient file written by [`Self::save_recipient`].
+    ///
+    /// The loaded key can encapsulate (encrypt). It cannot decapsulate.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidHeader`] if the file is not a recipient file, or
+    /// [`Error::Config`] if the key id is already present.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn load_recipient(&self, path: impl AsRef<Path>) -> Result<KeyId> {
+        let bytes = std::fs::read(path)?;
+        if bytes.len() < 6 + 2 + 1 + PUBLIC_KEY_LEN {
+            return Err(Error::invalid_header("recipient file too short"));
+        }
+        if &bytes[..6] != RECIPIENT_FILE_MAGIC {
+            return Err(Error::invalid_header("invalid recipient file magic"));
+        }
+        let id_len = u16::from_be_bytes([bytes[6], bytes[7]]) as usize;
+        let id_end = 8 + id_len;
+        let key_end = id_end + PUBLIC_KEY_LEN;
+        if bytes.len() != key_end {
+            return Err(Error::invalid_header("invalid recipient file length"));
+        }
+        let key_id = KeyId::new(
+            std::str::from_utf8(&bytes[8..id_end])
+                .map_err(|_| Error::invalid_header("key id not utf-8"))?,
+        )?;
+        let public = PublicKey::from_bytes(&bytes[id_end..key_end])?;
+        self.insert_public(key_id.clone(), public)?;
+        Ok(key_id)
     }
 
     /// Load a key file previously written by [`Self::save_key`].
@@ -236,5 +341,38 @@ mod tests {
         let (ct, ss1) = crate::crypto::encapsulate(&pk).unwrap();
         let ss2 = loaded.decapsulate(&id, &ct).await.unwrap();
         assert_eq!(ss1.as_bytes(), ss2.as_bytes());
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn recipient_file_has_no_seed() {
+        let dir = tempfile::tempdir().unwrap();
+        let key_path = dir.path().join("key.bin");
+        let recipient_path = dir.path().join("recipient.pk");
+        let id = KeyId::new("backup-v1").unwrap();
+        let provider = LocalKeyProvider::generate(id.clone()).unwrap();
+        let seed = provider.get_secret_key(&id).unwrap();
+        provider.save_key(&id, &key_path).unwrap();
+        provider.save_recipient(&id, &recipient_path).unwrap();
+
+        let recipient_bytes = std::fs::read(&recipient_path).unwrap();
+        assert!(
+            !recipient_bytes
+                .windows(seed.as_bytes().len())
+                .any(|window| window == seed.as_bytes())
+        );
+
+        let recipient = LocalKeyProvider::new();
+        assert_eq!(recipient.load_recipient(&recipient_path).unwrap(), id);
+        let pk = recipient.get_public_key(&id).unwrap();
+        let (ct, ss1) = crate::crypto::encapsulate(&pk).unwrap();
+        let err = recipient.decapsulate_sync(&id, &ct).unwrap_err();
+        assert!(matches!(err, Error::Crypto(_)));
+
+        let full = LocalKeyProvider::new();
+        full.load_key(&key_path).unwrap();
+        let ss2 = full.decapsulate_sync(&id, &ct).unwrap();
+        assert_eq!(ss1.as_bytes(), ss2.as_bytes());
+        assert!(full.load_recipient(&key_path).is_err());
     }
 }

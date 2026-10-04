@@ -150,15 +150,6 @@ pub fn peek_header(ciphertext: &[u8]) -> Result<ObjectHeader> {
     Ok(header)
 }
 
-/// Decrypt using an already-established ML-KEM shared secret.
-///
-/// Intended for [`crate::store`] after `KeyProvider::decapsulate`.
-#[cfg(feature = "store")]
-pub(crate) fn open_with_shared(ciphertext: &[u8], shared: &kem::SharedSecret) -> Result<Vec<u8>> {
-    let (header, body) = ObjectHeader::decode(ciphertext)?;
-    decrypt_body(&header, body, shared)
-}
-
 fn decrypt_body(
     header: &ObjectHeader,
     mut body: &[u8],

@@ -1,6 +1,6 @@
 [package]
 name = "pq-objectstore"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.94"
 description = "Post-quantum encrypted object storage for S3-compatible services"
@@ -35,8 +35,6 @@ default = ["store", "s3", "local-keys"]
 # Async object store + backends (tokio). Disable for wasm / JS+R2 flows.
 store = [
     "dep:tokio",
-    "dep:tokio-util",
-    "dep:tempfile",
     "dep:async-trait",
     "dep:futures",
     "dep:bytes",
@@ -68,8 +66,6 @@ async-trait = { version = "0.1", optional = true }
 bytes = { version = "1", optional = true }
 futures = { version = "0.3", optional = true }
 tokio = { version = "1", optional = true, features = ["io-util", "rt", "macros", "fs", "sync"] }
-tokio-util = { version = "0.7", optional = true, features = ["io"] }
-tempfile = { version = "3", optional = true }
 
 aws-config = { version = "1", optional = true, default-features = true, features = ["behavior-version-latest"] }
 aws-credential-types = { version = "1", optional = true }

@@ -12,7 +12,9 @@ pub type PublicKeyMaterial = PublicKey;
 /// Supplies public keys for encryption and private-key operations for decryption.
 ///
 /// Storage code never observes where private keys live. Implementations must
-/// keep private key material outside object storage.
+/// keep private key material outside object storage. A provider loaded from a
+/// recipient file can encrypt; decapsulation fails until the private key is
+/// loaded on the machine that decrypts.
 #[async_trait]
 pub trait KeyProvider: Send + Sync {
     /// Fetch the public encapsulation key for `key_id`.

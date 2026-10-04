@@ -88,14 +88,14 @@ cargo run --release --example bench
 
 ```toml
 [dependencies]
-pq-objectstore = "0.1"
+pq-objectstore = "0.2"
 ```
 
 For Workers / wasm only (no Tokio / AWS SDK):
 
 ```toml
 [dependencies]
-pq-objectstore = { version = "0.1", default-features = false, features = ["wasm", "local-keys"] }
+pq-objectstore = { version = "0.2", default-features = false, features = ["wasm", "local-keys"] }
 ```
 
 ## Quick Start
@@ -230,6 +230,34 @@ assert_eq!(open(&ct, &secret)?, b"secret");
 The same cookbook lives on the [docs.rs crate page](https://docs.rs/pq-objectstore)
 under **Quick starts → Cookbook: TypeScript + Cloudflare Worker + R2**.
 
+## Large objects
+
+`put` / `put_file` encrypt STREAM chunks and hand ciphertext to the backend as
+it is produced. There is no second full ciphertext file on disk. The S3
+backend uploads that stream as multipart parts of 8 MiB (the last part may be
+shorter), at most 10,000 parts, and aborts the upload if a part fails.
+
+`PutResult::content_length` is the ciphertext size. A later `head` returns the
+same number when the upload finished. `list` pages keys under a prefix, with
+each object's ciphertext size, using continuation tokens.
+
+`get` / `get_file` decrypt one chunk at a time and can write plaintext straight
+to a restore path.
+
+A backup host can encrypt with a recipient file (public key only). The 64-byte
+seed stays on the machine that decrypts:
+
+```rust
+keys.save_recipient(&id, "backup.pk")?;
+
+let backup_host = LocalKeyProvider::new();
+let key_id = backup_host.load_recipient("backup.pk")?;
+```
+
+Cloudflare R2 needs `region("auto")`, the account endpoint, and checksums only
+when the operation requires them. `S3Backend` sets that checksum mode so R2
+does not see `x-amz-checksum-algorithm`. `force_path_style` is on the builder.
+
 ## Cloudflare R2 (Rust S3 backend)
 
 ```bash
@@ -259,6 +287,7 @@ object IDs when that matters. See [SECURITY.md](SECURITY.md).
 
 Long-lived private keys live in a `KeyProvider`, never inside object storage.
 Writes use the configured active `key_id`; reads honor the ID in each header.
+`save_recipient` writes the public key for hosts that only encrypt.
 
 ```text
 Generate v2 → publish public key → set v2 active

@@ -64,3 +64,18 @@ impl Error {
         Self::Config(err.to_string())
     }
 }
+
+/// Wrap a crate error so it can travel through [`std::io::Error`].
+#[cfg(feature = "store")]
+pub(crate) fn io_error(err: Error) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, err)
+}
+
+/// Recover a crate error stored by [`io_error`], or keep a plain I/O failure.
+#[cfg(feature = "store")]
+pub(crate) fn error_from_io(err: std::io::Error) -> Error {
+    match err.downcast::<Error>() {
+        Ok(inner) => inner,
+        Err(err) => Error::Io(err),
+    }
+}

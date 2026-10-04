@@ -38,6 +38,9 @@ async fn main() -> pq_objectstore::Result<()> {
         id
     };
 
+    // R2: region "auto", the account endpoint, and checksums only when the
+    // operation requires them (the backend disables x-amz-checksum-algorithm).
+    // force_path_style is available on the builder for path-style gateways.
     let backend = S3Backend::builder()
         .endpoint(endpoint)
         .bucket(bucket)
@@ -54,7 +57,8 @@ async fn main() -> pq_objectstore::Result<()> {
 
     let object_key = "examples/r2/demo.bin";
     let payload = b"cloudflare r2 encrypted payload";
-    store.put_bytes(object_key, payload).await?;
+    let put = store.put_bytes(object_key, payload).await?;
+    println!("stored {} ciphertext bytes", put.content_length);
     let recovered = store.get_bytes(object_key).await?;
     assert_eq!(recovered, payload);
     println!("r2 round-trip ok for {object_key}");
